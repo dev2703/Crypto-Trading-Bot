@@ -10,36 +10,83 @@ import numpy as np
 from typing import Dict, List, Tuple
 import requests
 import json
+import time
 
 class DataCollector:
     """Data collector for trading."""
     def __init__(self, api_key: str):
         self.api_key = api_key
+        self.base_url = "https://www.alphavantage.co/query"
 
     def collect_ohlcv_data(self, symbol: str, interval: str, start_time: str, end_time: str) -> pd.DataFrame:
-        """Collect OHLCV data from an API."""
-        url = f"https://api.example.com/v1/ohlcv?symbol={symbol}&interval={interval}&start_time={start_time}&end_time={end_time}&api_key={self.api_key}"
-        response = requests.get(url)
+        """Collect OHLCV data from Alpha Vantage API."""
+        params = {
+            "function": "TIME_SERIES_INTRADAY" if interval == "1min" else "TIME_SERIES_DAILY",
+            "symbol": symbol,
+            "interval": interval,
+            "apikey": self.api_key,
+            "outputsize": "full"
+        }
+        response = requests.get(self.base_url, params=params)
+        if response.status_code != 200:
+            raise Exception(f"Error fetching data: {response.text}")
         data = response.json()
-        df = pd.DataFrame(data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
+        if "Error Message" in data:
+            raise Exception(f"API Error: {data['Error Message']}")
+        if "Note" in data:
+            print(f"API Note: {data['Note']}")  # Handle rate limit warnings
+        time_series_key = "Time Series (1min)" if interval == "1min" else "Time Series (Daily)"
+        if time_series_key not in data:
+            raise Exception(f"Unexpected API response: {data}")
+        df = pd.DataFrame.from_dict(data[time_series_key], orient="index")
+        df.index = pd.to_datetime(df.index)
+        df.columns = [col.split(".")[1] for col in df.columns]
+        df = df.astype(float)
+        df = df.loc[start_time:end_time]
         return df
 
     def collect_order_book_data(self, symbol: str) -> Dict:
-        """Collect order book data from an API."""
-        url = f"https://api.example.com/v1/orderbook?symbol={symbol}&api_key={self.api_key}"
-        response = requests.get(url)
-        return response.json()
+        """Collect order book data from Alpha Vantage API."""
+        params = {
+            "function": "GLOBAL_QUOTE",
+            "symbol": symbol,
+            "apikey": self.api_key
+        }
+        response = requests.get(self.base_url, params=params)
+        if response.status_code != 200:
+            raise Exception(f"Error fetching data: {response.text}")
+        data = response.json()
+        if "Error Message" in data:
+            raise Exception(f"API Error: {data['Error Message']}")
+        if "Note" in data:
+            print(f"API Note: {data['Note']}")  # Handle rate limit warnings
+        return data
 
     def collect_trade_data(self, symbol: str, start_time: str, end_time: str) -> pd.DataFrame:
-        """Collect trade data from an API."""
-        url = f"https://api.example.com/v1/trades?symbol={symbol}&start_time={start_time}&end_time={end_time}&api_key={self.api_key}"
-        response = requests.get(url)
+        """Collect trade data from Alpha Vantage API."""
+        params = {
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol,
+            "interval": "1min",
+            "apikey": self.api_key,
+            "outputsize": "full"
+        }
+        response = requests.get(self.base_url, params=params)
+        if response.status_code != 200:
+            raise Exception(f"Error fetching data: {response.text}")
         data = response.json()
-        df = pd.DataFrame(data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
+        if "Error Message" in data:
+            raise Exception(f"API Error: {data['Error Message']}")
+        if "Note" in data:
+            print(f"API Note: {data['Note']}")  # Handle rate limit warnings
+        time_series_key = "Time Series (1min)"
+        if time_series_key not in data:
+            raise Exception(f"Unexpected API response: {data}")
+        df = pd.DataFrame.from_dict(data[time_series_key], orient="index")
+        df.index = pd.to_datetime(df.index)
+        df.columns = [col.split(".")[1] for col in df.columns]
+        df = df.astype(float)
+        df = df.loc[start_time:end_time]
         return df
 
 def validate_data(df: pd.DataFrame) -> bool:
@@ -74,8 +121,8 @@ def generate_data_report(df: pd.DataFrame) -> str:
 # Example usage
 if __name__ == "__main__":
     # Example: Collect and validate data
-    collector = DataCollector(api_key="your_api_key")
-    ohlcv_data = collector.collect_ohlcv_data("BTC/USD", "1h", "2023-01-01", "2023-01-31")
+    collector = DataCollector(api_key="ARUSM71L0ISPNU4F")
+    ohlcv_data = collector.collect_ohlcv_data("AAPL", "1min", "2023-01-01", "2023-01-31")
     if validate_data(ohlcv_data):
         ohlcv_data = clean_data(ohlcv_data)
         report = generate_data_report(ohlcv_data)
