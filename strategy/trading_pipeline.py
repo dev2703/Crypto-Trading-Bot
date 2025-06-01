@@ -14,6 +14,7 @@ import time
 from .data_collection import DataCollector
 from .feature_engineering import FeatureEngineer
 from .technical_analysis import TechnicalAnalyzer
+from .ensemble_stack import EnsembleStack
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class TradingPipeline:
         self.collector = DataCollector(api_key=api_key)
         self.engineer = FeatureEngineer()
         self.analyzer = TechnicalAnalyzer()
+        self.ensemble = EnsembleStack(task='classification')
         self.logger = logging.getLogger(__name__)
         
     def fetch_and_prepare_data(self, coin_id: str, days: int = 60) -> pd.DataFrame:
@@ -161,6 +163,60 @@ class TradingPipeline:
         except Exception as e:
             self.logger.error(f"Error running pipeline for {coin_id}: {str(e)}")
             return {'error': str(e)}
+
+    def train_ensemble(self, coin_id: str, days: int = 365):
+        """
+        Train the ensemble stack on historical data.
+        
+        Args:
+            coin_id: CoinGecko coin ID
+            days: Number of days of historical data
+        """
+        try:
+            # Fetch and prepare data
+            data = self.fetch_and_prepare_data(coin_id, days)
+            if data.empty:
+                raise ValueError(f"No data available for {coin_id}")
+            
+            # Prepare target variable (e.g., next day's return)
+            data['target'] = data['close'].pct_change().shift(-1)
+            data = data.dropna()
+            
+            # Split features and target
+            X = data.drop(columns=['target'])
+            y = data['target']
+            
+            # Train ensemble
+            self.ensemble.fit(X, y)
+            logger.info(f"Ensemble stack trained for {coin_id}")
+            
+        except Exception as e:
+            logger.error(f"Error training ensemble for {coin_id}: {str(e)}")
+
+    def predict_with_ensemble(self, coin_id: str, days: int = 60) -> List[str]:
+        """
+        Predict trading signals using the ensemble stack.
+        
+        Args:
+            coin_id: CoinGecko coin ID
+            days: Number of days of historical data
+            
+        Returns:
+            List of trading signals (BUY, SELL, HOLD)
+        """
+        try:
+            # Fetch and prepare data
+            data = self.fetch_and_prepare_data(coin_id, days)
+            if data.empty:
+                raise ValueError(f"No data available for {coin_id}")
+            
+            # Predict signals
+            signals = self.ensemble.predict_signal(data)
+            return signals
+            
+        except Exception as e:
+            logger.error(f"Error predicting with ensemble for {coin_id}: {str(e)}")
+            return []
 
 # Example usage
 if __name__ == "__main__":
