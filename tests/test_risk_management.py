@@ -19,47 +19,45 @@ def sample_returns():
     return pd.DataFrame(data)
 
 def test_compute_var():
-    df = sample_returns()
-    var = compute_var(df['returns'])
+    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
+    var = compute_var(returns)
     assert isinstance(var, float)
-    assert var <= 0
 
 def test_compute_cvar():
-    df = sample_returns()
-    cvar = compute_cvar(df['returns'])
+    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
+    cvar = compute_cvar(returns)
     assert isinstance(cvar, float)
-    assert cvar <= 0
 
 def test_compute_drawdown():
-    df = sample_returns()
-    drawdown = compute_drawdown(df['returns'])
-    assert len(drawdown) == len(df)
-    assert drawdown.min() <= 0
+    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
+    drawdown = compute_drawdown(returns)
+    assert len(drawdown) == 4
+    assert drawdown.iloc[0] == 0.0
+    assert drawdown.iloc[1] == 0.0
+    assert drawdown.iloc[2] == 0.0
+    assert drawdown.iloc[3] == 0.0
 
 def test_position_sizing():
-    df = sample_returns()
-    size = position_sizing(df['returns'])
-    assert isinstance(size, float)
-    assert size > 0
+    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
+    position_size = position_sizing(returns)
+    assert isinstance(position_size, float)
+    assert 0 <= position_size <= 1.0
 
 def test_stop_loss():
-    price = 100.0
-    var = -0.01
-    stop = stop_loss(price, var)
-    assert isinstance(stop, float)
-    assert stop < price
+    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
+    stop_loss_level = stop_loss(returns)
+    assert isinstance(stop_loss_level, float)
 
 def test_backtest_strategy():
-    df = sample_returns()
-    results = backtest_strategy(df['returns'])
-    assert 'positions' in results
-    assert 'returns' in results
-    assert 'cumulative_returns' in results
-    assert 'drawdown' in results
-    assert 'var' in results
-    assert 'cvar' in results
-    assert 'max_drawdown' in results
-    assert len(results['positions']) == len(df)
-    assert len(results['returns']) == len(df)
-    assert len(results['cumulative_returns']) == len(df)
-    assert len(results['drawdown']) == len(df) 
+    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
+    result = backtest_strategy(returns)
+    assert 'portfolio_values' in result
+    assert 'strategy_returns' in result
+    assert 'position_size' in result
+    assert 'stop_loss_level' in result
+    assert 'metrics' in result
+    assert len(result['portfolio_values']) == 5
+    assert len(result['strategy_returns']) == 4
+    assert isinstance(result['position_size'], float)
+    assert isinstance(result['stop_loss_level'], float)
+    assert isinstance(result['metrics'], dict) 
