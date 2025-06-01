@@ -13,7 +13,7 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
   - Portfolio Optimization
   - Risk Management
 - **Signal Combiner**: Aggregates signals from multiple strategies using majority voting.
-- **Backtesting**: Simulates trading strategies on historical data.
+- **Backtesting**: Simulates trading strategies on historical data with realistic transaction costs and slippage.
 - **Performance Evaluation**: Computes metrics like Sharpe ratio, drawdown, and returns.
 - **Streamlit Dashboard**: Monitors signals, historical data, and performance metrics.
 - **Real-time Data Streaming**: WebSocket support for live market data.
@@ -22,8 +22,8 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/crypto-trading-bot.git
-   cd crypto-trading-bot
+   git clone https://github.com/dev2703/Crypto-Trading-Bot.git
+   cd Crypto-Trading-Bot
    ```
 
 2. **Install dependencies**:
@@ -65,6 +65,11 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
   print(result)
   ```
 
+## Recent Updates
+
+- **Transaction Costs and Slippage**: Added realistic transaction costs (0.05% per side) and slippage (0.01% random impact) to the backtesting engine.
+- **Enhanced HFT Signal Logic**: Improved signal generation with momentum, mean reversion, and additional noise for more realistic trading simulation.
+
 ## Next Steps
 
 - **Train a custom LLM** for sentiment analysis (e.g., fine-tune FinBERT)
@@ -87,4 +92,8 @@ MIT
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request. 
+Contributions are welcome! Please open an issue or submit a pull request.
+
+## About
+
+No description, website, or topics provided. 
