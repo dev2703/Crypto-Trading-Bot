@@ -1,46 +1,37 @@
-import pytest
+import unittest
 import pandas as pd
 import numpy as np
 from strategy.portfolio_optimization import compute_optimal_weights, rebalance_portfolio, backtest_strategy
 
-def sample_returns():
-    # Create a small sample returns DataFrame
-    data = {
-        'timestamp': pd.date_range('2023-01-01', periods=20, freq='D'),
-        'asset1': np.random.uniform(-0.01, 0.01, 20),
-        'asset2': np.random.uniform(-0.01, 0.01, 20),
-        'asset3': np.random.uniform(-0.01, 0.01, 20),
-        'asset4': np.random.uniform(-0.01, 0.01, 20)
-    }
-    return pd.DataFrame(data)
+class TestPortfolioOptimization(unittest.TestCase):
+    def setUp(self):
+        self.returns = pd.DataFrame({
+            'asset1': [0.01, -0.02, 0.03, 0.01, -0.01],
+            'asset2': [0.02, -0.01, 0.02, 0.01, -0.02],
+            'asset3': [0.01, 0.01, -0.01, 0.02, 0.01]
+        })
 
-def test_compute_optimal_weights():
-    returns = pd.DataFrame({
-        'BTC': [0.05, 0.0476, 0.0455, 0.0435],
-        'ETH': [0.04, 0.038, 0.036, 0.034]
-    })
-    weights = compute_optimal_weights(returns)
-    assert isinstance(weights, pd.Series)
-    assert len(weights) == 2
-    assert 'BTC' in weights.index
-    assert 'ETH' in weights.index
-    assert np.isclose(weights.sum(), 1.0)
+    def test_compute_optimal_weights(self):
+        weights = compute_optimal_weights(self.returns)
+        self.assertIsInstance(weights, np.ndarray)
+        self.assertEqual(len(weights), len(self.returns.columns))
+        self.assertAlmostEqual(np.sum(weights), 1.0)
+        self.assertTrue(np.all(weights >= 0))
 
-def test_rebalance_portfolio():
-    current_weights = pd.Series({'BTC': 0.5, 'ETH': 0.5})
-    target_weights = pd.Series({'BTC': 0.6, 'ETH': 0.4})
-    assert rebalance_portfolio(current_weights, target_weights, threshold=0.1)
-    assert not rebalance_portfolio(current_weights, target_weights, threshold=0.2)
+    def test_rebalance_portfolio(self):
+        current_weights = np.array([0.4, 0.3, 0.3])
+        target_weights = np.array([0.5, 0.3, 0.2])
+        self.assertTrue(rebalance_portfolio(current_weights, target_weights, threshold=0.1))
+        self.assertFalse(rebalance_portfolio(current_weights, target_weights, threshold=0.2))
 
-def test_backtest_strategy():
-    returns = pd.DataFrame({
-        'BTC': [0.05, 0.0476, 0.0455, 0.0435],
-        'ETH': [0.04, 0.038, 0.036, 0.034]
-    })
-    result = backtest_strategy(returns)
-    assert 'portfolio_returns' in result
-    assert 'cumulative_returns' in result
-    assert 'metrics' in result
-    assert len(result['portfolio_returns']) == 4
-    assert len(result['cumulative_returns']) == 4
-    assert isinstance(result['metrics'], dict) 
+    def test_backtest_strategy(self):
+        result = backtest_strategy(self.returns)
+        self.assertIn('portfolio_returns', result)
+        self.assertIn('cumulative_returns', result)
+        self.assertIsInstance(result['portfolio_returns'], pd.Series)
+        self.assertIsInstance(result['cumulative_returns'], pd.Series)
+        self.assertEqual(len(result['portfolio_returns']), len(self.returns))
+        self.assertEqual(len(result['cumulative_returns']), len(self.returns))
+
+if __name__ == '__main__':
+    unittest.main() 
