@@ -1,65 +1,120 @@
 """
 Execution Strategy Module
-- Defines order types (market, limit, stop)
-- Implements smart order routing and execution algorithms
-- Includes transaction cost modeling and slippage analysis
+- Defines the execution environment and state space
+- Implements the execution algorithm
+- Generates execution signals
+- Includes backtesting and performance evaluation
 """
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple
+from strategy.performance_evaluation import compute_performance_metrics
 
-class Order:
-    """Base class for different order types."""
-    def __init__(self, symbol: str, quantity: float, order_type: str):
-        self.symbol = symbol
-        self.quantity = quantity
-        self.order_type = order_type
+class ExecutionEnvironment:
+    """Execution environment for trading."""
+    def __init__(self, prices: pd.Series, volume: pd.Series, window_size: int = 10):
+        self.prices = prices
+        self.volume = volume
+        self.window_size = window_size
+        self.current_step = window_size
+        self.max_steps = len(prices) - window_size
+        self.state = self._get_state()
+        self.action_space = [0, 1]  # Hold, Execute
 
-class MarketOrder(Order):
-    """Market order class."""
-    def __init__(self, symbol: str, quantity: float):
-        super().__init__(symbol, quantity, 'market')
+    def _get_state(self) -> np.ndarray:
+        """Get the current state."""
+        window = self.prices[self.current_step - self.window_size:self.current_step]
+        volume_window = self.volume[self.current_step - self.window_size:self.current_step]
+        returns = window.pct_change().dropna()
+        return np.array([
+            returns.mean(),
+            returns.std(),
+            volume_window.mean(),
+            volume_window.std()
+        ])
 
-class LimitOrder(Order):
-    """Limit order class."""
-    def __init__(self, symbol: str, quantity: float, limit_price: float):
-        super().__init__(symbol, quantity, 'limit')
-        self.limit_price = limit_price
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool]:
+        """Take a step in the environment."""
+        self.current_step += 1
+        next_state = self._get_state()
+        reward = self._compute_reward(action)
+        done = self.current_step >= self.max_steps
+        return next_state, reward, done
 
-class StopOrder(Order):
-    """Stop order class."""
-    def __init__(self, symbol: str, quantity: float, stop_price: float):
-        super().__init__(symbol, quantity, 'stop')
-        self.stop_price = stop_price
+    def _compute_reward(self, action: int) -> float:
+        """Compute the reward for an action."""
+        if self.current_step >= len(self.prices):
+            return 0.0
+        returns = self.prices.pct_change().dropna()
+        if action == 0:
+            return 0.0
+        else:
+            return returns.iloc[self.current_step - 1]
 
-def compute_transaction_cost(order: Order, price: float, fee_rate: float = 0.001) -> float:
-    """Compute transaction cost for an order."""
-    return order.quantity * price * fee_rate
+    def reset(self) -> np.ndarray:
+        """Reset the environment."""
+        self.current_step = self.window_size
+        self.state = self._get_state()
+        return self.state
 
-def compute_slippage(order: Order, market_price: float, slippage_rate: float = 0.001) -> float:
-    """Compute slippage for an order."""
-    return order.quantity * market_price * slippage_rate
+class ExecutionAgent:
+    """Execution agent for trading."""
+    def __init__(self, state_size: int, action_size: int, learning_rate: float = 0.1, discount_factor: float = 0.99, exploration_rate: float = 0.1):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.learning_rate = learning_rate
+        self.discount_factor = discount_factor
+        self.exploration_rate = exploration_rate
+        self.q_table = np.zeros((state_size, action_size))
 
-def execute_order(order: Order, market_price: float, fee_rate: float = 0.001, slippage_rate: float = 0.001) -> Dict:
-    """Execute an order and compute costs and slippage."""
-    transaction_cost = compute_transaction_cost(order, market_price, fee_rate)
-    slippage = compute_slippage(order, market_price, slippage_rate)
-    total_cost = transaction_cost + slippage
+    def get_action(self, state: np.ndarray) -> int:
+        """Get the action for a state."""
+        if np.random.rand() < self.exploration_rate:
+            return np.random.choice(self.action_size)
+        return np.argmax(self.q_table[state])
+
+    def update(self, state: np.ndarray, action: int, reward: float, next_state: np.ndarray):
+        """Update the Q-table."""
+        old_value = self.q_table[state, action]
+        next_max = np.max(self.q_table[next_state])
+        new_value = (1 - self.learning_rate) * old_value + self.learning_rate * (reward + self.discount_factor * next_max)
+        self.q_table[state, action] = new_value
+
+def backtest_strategy(prices: pd.Series, volume: pd.Series, window_size: int = 10, learning_rate: float = 0.1, discount_factor: float = 0.99, exploration_rate: float = 0.1) -> Dict:
+    """Backtest an execution strategy."""
+    env = ExecutionEnvironment(prices, volume, window_size)
+    agent = ExecutionAgent(env.state_size, len(env.action_space), learning_rate, discount_factor, exploration_rate)
+    signals = pd.Series(0, index=prices.index)
+    for _ in range(1000):  # Training episodes
+        state = env.reset()
+        done = False
+        while not done:
+            action = agent.get_action(state)
+            next_state, reward, done = env.step(action)
+            agent.update(state, action, reward, next_state)
+            state = next_state
+    state = env.reset()
+    done = False
+    while not done:
+        action = agent.get_action(state)
+        signals.iloc[env.current_step] = env.action_space[action]
+        next_state, _, done = env.step(action)
+        state = next_state
+    returns = prices.pct_change().dropna()
+    strategy_returns = signals.shift(1) * returns
+    cumulative_returns = (1 + strategy_returns).cumprod()
+    metrics = compute_performance_metrics(strategy_returns)
     return {
-        'order': order,
-        'market_price': market_price,
-        'transaction_cost': transaction_cost,
-        'slippage': slippage,
-        'total_cost': total_cost
+        'signals': signals,
+        'strategy_returns': strategy_returns,
+        'cumulative_returns': cumulative_returns,
+        'metrics': metrics
     }
 
 # Example usage
 if __name__ == "__main__":
-    # Example: Create and execute orders
-    market_order = MarketOrder('BTC', 1.0)
-    limit_order = LimitOrder('ETH', 10.0, 2000.0)
-    stop_order = StopOrder('XRP', 100.0, 0.5)
-    
-    market_price = 50000.0
-    result = execute_order(market_order, market_price)
+    # Example: Load sample data and backtest strategy
+    prices = pd.Series([100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110])
+    volume = pd.Series([1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000])
+    result = backtest_strategy(prices, volume)
     print(result) 

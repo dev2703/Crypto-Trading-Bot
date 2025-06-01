@@ -1,34 +1,46 @@
 """
 Performance Evaluation Strategy Module
-- Computes performance metrics (returns, Sharpe ratio, drawdown)
-- Visualizes performance results
-- Compares different strategies
+- Defines the performance metrics and evaluation criteria
+- Implements the evaluation algorithm
+- Generates performance reports
+- Includes visualization and analysis tools
 """
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple
-from strategy.backtesting import compute_returns, compute_sharpe_ratio, compute_drawdown
 
 def compute_performance_metrics(returns: pd.Series) -> Dict:
-    """Compute performance metrics from returns."""
-    sharpe_ratio = compute_sharpe_ratio(returns)
-    drawdown = compute_drawdown(returns)
-    max_drawdown = drawdown.min()
-    cumulative_returns = (1 + returns).cumprod()
-    total_return = cumulative_returns.iloc[-1] - 1
+    """Compute performance metrics for a strategy."""
+    total_return = (1 + returns).prod() - 1
     annualized_return = (1 + total_return) ** (252 / len(returns)) - 1
-    annualized_volatility = returns.std() * np.sqrt(252)
+    volatility = returns.std() * np.sqrt(252)
+    sharpe_ratio = annualized_return / volatility
+    max_drawdown = (returns.cumsum() - returns.cumsum().cummax()).min()
     return {
-        'sharpe_ratio': sharpe_ratio,
-        'max_drawdown': max_drawdown,
         'total_return': total_return,
         'annualized_return': annualized_return,
-        'annualized_volatility': annualized_volatility
+        'volatility': volatility,
+        'sharpe_ratio': sharpe_ratio,
+        'max_drawdown': max_drawdown
     }
 
+def generate_performance_report(returns: pd.Series) -> str:
+    """Generate a performance report for a strategy."""
+    metrics = compute_performance_metrics(returns)
+    report = f"""
+    Performance Report:
+    -----------------
+    Total Return: {metrics['total_return']:.2%}
+    Annualized Return: {metrics['annualized_return']:.2%}
+    Volatility: {metrics['volatility']:.2%}
+    Sharpe Ratio: {metrics['sharpe_ratio']:.2f}
+    Maximum Drawdown: {metrics['max_drawdown']:.2%}
+    """
+    return report
+
 def plot_performance(returns: pd.Series, title: str = 'Strategy Performance'):
-    """Plot performance results."""
+    """Plot the performance of a strategy."""
     cumulative_returns = (1 + returns).cumprod()
     plt.figure(figsize=(10, 6))
     plt.plot(cumulative_returns.index, cumulative_returns.values)
@@ -38,23 +50,19 @@ def plot_performance(returns: pd.Series, title: str = 'Strategy Performance'):
     plt.grid(True)
     plt.show()
 
-def compare_strategies(strategy_returns: Dict[str, pd.Series]) -> pd.DataFrame:
-    """Compare different strategies."""
-    metrics = {}
-    for strategy_name, returns in strategy_returns.items():
-        metrics[strategy_name] = compute_performance_metrics(returns)
-    return pd.DataFrame(metrics).T
+def analyze_performance(returns: pd.Series) -> Dict:
+    """Analyze the performance of a strategy."""
+    metrics = compute_performance_metrics(returns)
+    report = generate_performance_report(returns)
+    plot_performance(returns)
+    return {
+        'metrics': metrics,
+        'report': report
+    }
 
 # Example usage
 if __name__ == "__main__":
-    # Example: Load sample data and evaluate performance
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    metrics = compute_performance_metrics(returns)
-    print(metrics)
-    plot_performance(returns)
-    strategy_returns = {
-        'Strategy 1': returns,
-        'Strategy 2': returns * 1.1
-    }
-    comparison = compare_strategies(strategy_returns)
-    print(comparison) 
+    # Example: Load sample data and analyze performance
+    returns = pd.Series([0.01, -0.02, 0.03, -0.01, 0.02])
+    result = analyze_performance(returns)
+    print(result['report']) 
