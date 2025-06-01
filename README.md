@@ -12,10 +12,11 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
   - Reinforcement Learning
   - Portfolio Optimization
   - Risk Management
-- **Signal Combiner**: Aggregates signals from multiple strategies.
+- **Signal Combiner**: Aggregates signals from multiple strategies using majority voting.
 - **Backtesting**: Simulates trading strategies on historical data.
 - **Performance Evaluation**: Computes metrics like Sharpe ratio, drawdown, and returns.
 - **Streamlit Dashboard**: Monitors signals, historical data, and performance metrics.
+- **Real-time Data Streaming**: WebSocket support for live market data.
 
 ## Setup
 
@@ -30,10 +31,14 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
    pip install -r requirements.txt
    ```
 
-3. **Set up Alpha Vantage API key**:
-   - Sign up for a free API key at [Alpha Vantage](https://www.alphavantage.co/).
-   - Replace `ARUSM71L0ISPNU4F` in `strategy/data_collection.py` and `app.py` with your API key.
-   - Note: The free tier has a rate limit of 5 API calls per minute and 500 calls per day.
+3. **Set up environment variables**:
+   - Create a `.env` file in the project root directory
+   - Add your Alpha Vantage API key:
+     ```
+     ALPHA_VANTAGE_API_KEY=your_api_key_here
+     ```
+   - Note: Never commit the `.env` file to version control
+   - The free tier has a rate limit of 5 API calls per minute and 500 calls per day
 
 ## Usage
 
@@ -45,13 +50,14 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
    ```
 
 2. **Access the dashboard**:
-   - Open your browser and go to `http://localhost:8501`.
-   - Use the sidebar to input parameters (symbol, interval, start/end time).
-   - Click "Fetch Data" to load historical data and view signals.
+   - Open your browser and go to `http://localhost:8501`
+   - Use the sidebar to input parameters (symbol, interval, start/end time)
+   - Click "Start Streaming" to receive real-time price updates
+   - Click "Fetch Historical Data" to load historical data and view signals
 
 ### Running Backtests
 
-- Use the `backtest_strategy` functions in each strategy module to simulate trading on historical data.
+- Use the `backtest_strategy` functions in each strategy module to simulate trading on historical data
 - Example:
   ```python
   from strategy.statistical_arbitrage import backtest_strategy
@@ -61,12 +67,19 @@ A modular, Python-based trading bot for cryptocurrency and stock markets. This p
 
 ## Next Steps
 
-- **Train a custom LLM** for sentiment analysis (e.g., fine-tune FinBERT).
-- **Implement real-time data streaming** using WebSocket APIs.
-- **Deploy the bot on a server** (e.g., AWS, GCP) for continuous operation.
-- **Build a more advanced frontend** for real-time monitoring and manual overrides.
-- **Parameter tuning and optimization** using real historical data.
-- **Deploy in a sandbox/paper trading environment** before going live.
+- **Train a custom LLM** for sentiment analysis (e.g., fine-tune FinBERT)
+- **Implement real-time data streaming** using WebSocket APIs
+- **Deploy the bot on a server** (e.g., AWS, GCP) for continuous operation
+- **Build a more advanced frontend** for real-time monitoring and manual overrides
+- **Parameter tuning and optimization** using real historical data
+- **Deploy in a sandbox/paper trading environment** before going live
+
+## Security Notes
+
+- Never commit API keys or sensitive credentials to version control
+- Use environment variables for all sensitive information
+- Keep your `.env` file secure and never share it
+- Regularly rotate API keys and credentials
 
 ## License
 

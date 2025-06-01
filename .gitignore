@@ -1,7 +1,5 @@
 # Environment variables
 .env
-.env.*
-!.env.example
 
 # Python
 __pycache__/
@@ -36,6 +34,12 @@ ENV/
 *.swp
 *.swo
 
+# Logs
+*.log
+
+# Local development
+.DS_Store
+
 # Data files
 *.csv
 *.h5
@@ -50,16 +54,10 @@ ENV/
 *.model
 *.joblib
 
-# Logs
-*.log
-logs/
-log/
-
 # Jupyter Notebook
 .ipynb_checkpoints
 
 # OS
-.DS_Store
 Thumbs.db
 
 # Docker
