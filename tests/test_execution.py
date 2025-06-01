@@ -4,6 +4,7 @@ import unittest
 import pandas as pd
 import numpy as np
 from strategy.execution import ExecutionEnvironment, ExecutionAgent, backtest_strategy
+from strategy.execution import ExecutionStrategy, OrderType, analyze_transaction_costs
 
 def test_market_order():
     order = MarketOrder('BTC', 1.0)
@@ -100,6 +101,46 @@ class TestExecution(unittest.TestCase):
         self.assertEqual(len(result['signals']), len(self.prices))
         self.assertEqual(len(result['strategy_returns']), len(self.prices) - 1)
         self.assertEqual(len(result['cumulative_returns']), len(self.prices) - 1)
+
+class TestExecutionStrategy(unittest.TestCase):
+    def setUp(self):
+        self.market_strategy = ExecutionStrategy(OrderType.MARKET)
+        self.limit_strategy = ExecutionStrategy(OrderType.LIMIT, price=100)
+        self.stop_strategy = ExecutionStrategy(OrderType.STOP, stop_price=110)
+
+    def test_execute_market_order(self):
+        order = self.market_strategy.execute_order(10, 100)
+        self.assertEqual(order['order_type'], OrderType.MARKET.value)
+        self.assertEqual(order['quantity'], 10)
+        self.assertEqual(order['price'], 100)
+        self.assertEqual(order['total_cost'], 1000)
+
+    def test_execute_limit_order(self):
+        order = self.limit_strategy.execute_order(10, 99)
+        self.assertEqual(order['order_type'], OrderType.LIMIT.value)
+        self.assertEqual(order['quantity'], 10)
+        self.assertEqual(order['price'], 100)
+        self.assertEqual(order['total_cost'], 1000)
+
+    def test_execute_stop_order(self):
+        order = self.stop_strategy.execute_order(10, 111)
+        self.assertEqual(order['order_type'], OrderType.STOP.value)
+        self.assertEqual(order['quantity'], 10)
+        self.assertEqual(order['price'], 111)
+        self.assertEqual(order['total_cost'], 1110)
+
+    def test_analyze_transaction_costs(self):
+        orders = [
+            self.market_strategy.execute_order(10, 100),
+            self.market_strategy.execute_order(20, 101)
+        ]
+        costs = analyze_transaction_costs(orders)
+        self.assertIn('total_cost', costs)
+        self.assertIn('total_commission', costs)
+        self.assertIn('total_transaction_cost', costs)
+        self.assertEqual(costs['total_cost'], 3020)
+        self.assertEqual(costs['total_commission'], 3.02)
+        self.assertEqual(costs['total_transaction_cost'], 3023.02)
 
 if __name__ == '__main__':
     unittest.main() 
