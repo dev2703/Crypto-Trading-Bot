@@ -1,0 +1,17 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&display=swap');
+
+.font-montserrat {
+  font-family: 'Montserrat', sans-serif;
+}
+
+.dashboard-bg {
+  /* Subtle animated background pattern */
+  background-image: url('data:image/svg+xml;utf8,<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" fill="%23ffffff00"/><circle cx="20" cy="20" r="2" fill="%23a5b4fc"/><circle cx="10" cy="10" r="1.5" fill="%23f472b6"/><circle cx="30" cy="30" r="1.5" fill="%23f472b6"/><circle cx="30" cy="10" r="1.5" fill="%236ee7b7"/><circle cx="10" cy="30" r="1.5" fill="%236ee7b7"/></svg>');
+  background-size: 80px 80px;
+  animation: movePattern 20s linear infinite;
+}
+
+@keyframes movePattern {
+  0% { background-position: 0 0; }
+  100% { background-position: 80px 80px; }
+} 
