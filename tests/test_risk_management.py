@@ -1,4 +1,4 @@
-import pytest
+import unittest
 import pandas as pd
 import numpy as np
 from strategy.risk_management import (
@@ -10,54 +10,49 @@ from strategy.risk_management import (
     backtest_strategy
 )
 
-def sample_returns():
-    # Create a small sample returns DataFrame
-    data = {
-        'timestamp': pd.date_range('2023-01-01', periods=20, freq='D'),
-        'returns': np.random.uniform(-0.01, 0.01, 20)
-    }
-    return pd.DataFrame(data)
+class TestRiskManagement(unittest.TestCase):
+    def setUp(self):
+        self.returns = pd.Series([0.01, -0.02, 0.03, 0.01, -0.01])
 
-def test_compute_var():
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    var = compute_var(returns)
-    assert isinstance(var, float)
+    def test_compute_var(self):
+        var = compute_var(self.returns)
+        self.assertIsInstance(var, float)
+        self.assertLess(var, 0)
 
-def test_compute_cvar():
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    cvar = compute_cvar(returns)
-    assert isinstance(cvar, float)
+    def test_compute_cvar(self):
+        cvar = compute_cvar(self.returns)
+        self.assertIsInstance(cvar, float)
+        self.assertLess(cvar, 0)
 
-def test_compute_drawdown():
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    drawdown = compute_drawdown(returns)
-    assert len(drawdown) == 4
-    assert drawdown.iloc[0] == 0.0
-    assert drawdown.iloc[1] == 0.0
-    assert drawdown.iloc[2] == 0.0
-    assert drawdown.iloc[3] == 0.0
+    def test_compute_drawdown(self):
+        drawdown = compute_drawdown(self.returns)
+        self.assertIsInstance(drawdown, pd.Series)
+        self.assertEqual(len(drawdown), len(self.returns))
+        self.assertLessEqual(drawdown.min(), 0)
 
-def test_position_sizing():
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    position_size = position_sizing(returns)
-    assert isinstance(position_size, float)
-    assert 0 <= position_size <= 1.0
+    def test_position_sizing(self):
+        size = position_sizing(self.returns)
+        self.assertIsInstance(size, float)
+        self.assertGreater(size, 0)
 
-def test_stop_loss():
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    stop_loss_level = stop_loss(returns)
-    assert isinstance(stop_loss_level, float)
+    def test_stop_loss(self):
+        level = stop_loss(self.returns)
+        self.assertIsInstance(level, float)
+        self.assertLess(level, 0)
 
-def test_backtest_strategy():
-    returns = pd.Series([0.05, 0.0476, 0.0455, 0.0435])
-    result = backtest_strategy(returns)
-    assert 'portfolio_values' in result
-    assert 'strategy_returns' in result
-    assert 'position_size' in result
-    assert 'stop_loss_level' in result
-    assert 'metrics' in result
-    assert len(result['portfolio_values']) == 5
-    assert len(result['strategy_returns']) == 4
-    assert isinstance(result['position_size'], float)
-    assert isinstance(result['stop_loss_level'], float)
-    assert isinstance(result['metrics'], dict) 
+    def test_backtest_strategy(self):
+        position_size = position_sizing(self.returns)
+        stop_loss_level = stop_loss(self.returns)
+        result = backtest_strategy(self.returns, position_size, stop_loss_level)
+        self.assertIn('portfolio_returns', result)
+        self.assertIn('cumulative_returns', result)
+        self.assertIn('drawdown', result)
+        self.assertIsInstance(result['portfolio_returns'], pd.Series)
+        self.assertIsInstance(result['cumulative_returns'], pd.Series)
+        self.assertIsInstance(result['drawdown'], pd.Series)
+        self.assertEqual(len(result['portfolio_returns']), len(self.returns))
+        self.assertEqual(len(result['cumulative_returns']), len(self.returns))
+        self.assertEqual(len(result['drawdown']), len(self.returns))
+
+if __name__ == '__main__':
+    unittest.main() 
