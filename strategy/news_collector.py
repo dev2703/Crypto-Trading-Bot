@@ -1,6 +1,9 @@
 """
 News Collection Module
-- Collects financial news from various sources
+- Collects financial news from multiple sources:
+  - Alpha Vantage (market news and sentiment)
+  - NewsAPI (general news)
+  - Finnhub (financial news)
 - Processes and filters news articles
 - Integrates with sentiment analysis
 """
@@ -17,17 +20,26 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class NewsCollector:
-    """Collects financial news from various sources."""
+    """Collects financial news from multiple sources."""
     
     def __init__(self):
         """Initialize the news collector with API keys."""
         load_dotenv()
         self.alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY')
-        self.newsapi_key = os.getenv('NEWSAPI_KEY')  # You'll need to sign up for NewsAPI
-        self.finnhub_key = os.getenv('FINNHUB_KEY')  # You'll need to sign up for Finnhub
+        self.newsapi_key = os.getenv('NEWSAPI_KEY')
+        self.finnhub_key = os.getenv('FINNHUB_KEY')
         
-        if not all([self.alpha_vantage_key, self.newsapi_key, self.finnhub_key]):
-            logger.warning("Some API keys are missing. Some news sources may not be available.")
+        # Check for required API keys
+        missing_keys = []
+        if not self.alpha_vantage_key:
+            missing_keys.append('ALPHA_VANTAGE_API_KEY')
+        if not self.newsapi_key:
+            missing_keys.append('NEWSAPI_KEY')
+        if not self.finnhub_key:
+            missing_keys.append('FINNHUB_KEY')
+            
+        if missing_keys:
+            logger.warning(f"Missing API keys: {', '.join(missing_keys)}. Some news sources may not be available.")
     
     def get_alpha_vantage_news(self, symbol: str, limit: int = 50) -> List[Dict]:
         """
@@ -40,6 +52,10 @@ class NewsCollector:
         Returns:
             List of news articles
         """
+        if not self.alpha_vantage_key:
+            logger.warning("Alpha Vantage API key not found. Skipping Alpha Vantage news.")
+            return []
+            
         try:
             url = "https://www.alphavantage.co/query"
             params = {
@@ -72,6 +88,10 @@ class NewsCollector:
         Returns:
             List of news articles
         """
+        if not self.newsapi_key:
+            logger.warning("NewsAPI key not found. Skipping NewsAPI news.")
+            return []
+            
         try:
             url = "https://newsapi.org/v2/everything"
             from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -107,6 +127,10 @@ class NewsCollector:
         Returns:
             List of news articles
         """
+        if not self.finnhub_key:
+            logger.warning("Finnhub key not found. Skipping Finnhub news.")
+            return []
+            
         try:
             url = "https://finnhub.io/api/v1/news"
             params = {

@@ -1,203 +1,201 @@
 """
 Sentiment Analysis Module
-- Implements sentiment analysis using a custom LLM
+- Implements sentiment analysis using TF-IDF and Naive Bayes
 - Processes financial news and social media data
 - Generates sentiment scores for trading signals
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple
 import logging
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
-from torch.utils.data import Dataset, DataLoader
-import os
-from dotenv import load_dotenv
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class FinancialDataset(Dataset):
-    """Custom dataset for financial text data."""
-    
-    def __init__(self, texts: List[str], labels: List[int], tokenizer):
-        self.texts = texts
-        self.labels = labels
-        self.tokenizer = tokenizer
-    
-    def __len__(self):
-        return len(self.texts)
-    
-    def __getitem__(self, idx):
-        text = self.texts[idx]
-        label = self.labels[idx]
-        encoding = self.tokenizer(text, truncation=True, padding='max_length', max_length=512, return_tensors='pt')
-        return {
-            'input_ids': encoding['input_ids'].squeeze(),
-            'attention_mask': encoding['attention_mask'].squeeze(),
-            'labels': torch.tensor(label, dtype=torch.long)
-        }
-
 class SentimentAnalyzer:
-    """Sentiment analyzer using a custom LLM."""
+    """
+    A class for analyzing sentiment in financial news and social media data.
+    Uses a simple TF-IDF and Naive Bayes approach for sentiment analysis.
+    """
     
-    def __init__(self, model_name: str = "finbert-sentiment"):
+    def __init__(self):
+        """Initialize the sentiment analyzer."""
+        self.vectorizer = TfidfVectorizer(
+            max_features=5000,
+            stop_words='english',
+            ngram_range=(1, 2)
+        )
+        self.classifier = MultinomialNB()
+        self.is_trained = False
+        self.logger = logging.getLogger(__name__)
+        
+    def preprocess_text(self, text):
         """
-        Initialize the sentiment analyzer.
+        Preprocess text for sentiment analysis.
         
         Args:
-            model_name: Name of the pre-trained model to use
-        """
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        self.model.to(self.device)
-        self.model.eval()
-    
-    def preprocess_text(self, text: str) -> str:
-        """
-        Preprocess the input text.
-        
-        Args:
-            text: Input text to preprocess
-        
+            text (str): Input text
+            
         Returns:
-            Preprocessed text
+            str: Preprocessed text
         """
+        if not isinstance(text, str):
+            return ""
+            
+        # Convert to lowercase
+        text = text.lower()
+        
         # Remove URLs
-        text = ' '.join([word for word in text.split() if not word.startswith('http')])
-        # Remove special characters
-        text = ''.join([char for char in text if char.isalnum() or char.isspace()])
-        return text.strip()
+        text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+        
+        # Remove special characters and numbers
+        text = re.sub(r'[^\w\s]', '', text)
+        text = re.sub(r'\d+', '', text)
+        
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        
+        return text
     
-    def analyze_sentiment(self, text: str) -> Dict[str, float]:
+    def train(self, texts, labels):
         """
-        Analyze sentiment of the input text.
+        Train the sentiment analyzer on labeled data.
         
         Args:
-            text: Input text to analyze
-        
-        Returns:
-            Dictionary containing sentiment scores
+            texts (list): List of text samples
+            labels (list): List of corresponding labels (1 for positive, 0 for neutral, -1 for negative)
         """
-        text = self.preprocess_text(text)
-        inputs = self.tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            scores = torch.softmax(outputs.logits, dim=1)
-        
-        return {
-            'positive': scores[0][2].item(),
-            'neutral': scores[0][1].item(),
-            'negative': scores[0][0].item()
-        }
+        try:
+            # Preprocess texts
+            processed_texts = [self.preprocess_text(text) for text in texts]
+            
+            # Convert labels to binary (positive/negative)
+            binary_labels = [1 if label > 0 else 0 for label in labels]
+            
+            # Vectorize texts
+            X = self.vectorizer.fit_transform(processed_texts)
+            
+            # Train classifier
+            self.classifier.fit(X, binary_labels)
+            self.is_trained = True
+            
+            self.logger.info("Successfully trained sentiment analyzer")
+            
+        except Exception as e:
+            self.logger.error(f"Error training sentiment analyzer: {str(e)}")
+            raise
     
-    def analyze_batch(self, texts: List[str]) -> List[Dict[str, float]]:
+    def analyze_sentiment(self, text):
         """
-        Analyze sentiment of multiple texts.
+        Analyze sentiment of a given text.
         
         Args:
-            texts: List of texts to analyze
-        
+            text (str): Input text
+            
         Returns:
-            List of sentiment score dictionaries
+            dict: Dictionary containing sentiment scores
+        """
+        try:
+            if not self.is_trained:
+                # If not trained, return neutral sentiment
+                return {
+                    'positive': 0.33,
+                    'neutral': 0.34,
+                    'negative': 0.33,
+                    'sentiment': 0
+                }
+            
+            # Preprocess text
+            processed_text = self.preprocess_text(text)
+            
+            # Vectorize text
+            X = self.vectorizer.transform([processed_text])
+            
+            # Get probability scores
+            proba = self.classifier.predict_proba(X)[0]
+            
+            # Calculate sentiment scores
+            positive_score = proba[1] if len(proba) > 1 else 0.33
+            negative_score = proba[0] if len(proba) > 0 else 0.33
+            neutral_score = 1 - (positive_score + negative_score)
+            
+            # Calculate overall sentiment (-1 to 1)
+            sentiment = positive_score - negative_score
+            
+            return {
+                'positive': positive_score,
+                'neutral': neutral_score,
+                'negative': negative_score,
+                'sentiment': sentiment
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing sentiment: {str(e)}")
+            return {
+                'positive': 0.33,
+                'neutral': 0.34,
+                'negative': 0.33,
+                'sentiment': 0
+            }
+    
+    def analyze_batch(self, texts):
+        """
+        Analyze sentiment for a batch of texts.
+        
+        Args:
+            texts (list): List of texts to analyze
+            
+        Returns:
+            list: List of sentiment analysis results
         """
         return [self.analyze_sentiment(text) for text in texts]
     
-    def generate_signal(self, sentiment_scores: Dict[str, float]) -> int:
+    def get_sentiment_label(self, sentiment_score):
         """
-        Generate trading signal based on sentiment scores.
+        Convert sentiment score to label.
         
         Args:
-            sentiment_scores: Dictionary of sentiment scores
-        
+            sentiment_score (float): Sentiment score between -1 and 1
+            
         Returns:
-            Trading signal: 1 (buy), 0 (hold), or -1 (sell)
+            str: Sentiment label
         """
-        # Calculate sentiment score as weighted average
-        score = (
-            sentiment_scores['positive'] * 1 +
-            sentiment_scores['neutral'] * 0 +
-            sentiment_scores['negative'] * -1
-        )
-        
-        # Generate signal based on threshold
-        if score > 0.2:
-            return 1  # Buy
-        elif score < -0.2:
-            return -1  # Sell
+        if sentiment_score > 0.2:
+            return "Positive"
+        elif sentiment_score < -0.2:
+            return "Negative"
         else:
-            return 0  # Hold
-    
-    def fine_tune(self, train_texts: List[str], train_labels: List[int], 
-                 val_texts: List[str], val_labels: List[int],
-                 epochs: int = 3, batch_size: int = 16) -> None:
-        """
-        Fine-tune the model on custom data.
-        
-        Args:
-            train_texts: List of training texts
-            train_labels: List of training labels
-            val_texts: List of validation texts
-            val_labels: List of validation labels
-            epochs: Number of training epochs
-            batch_size: Batch size for training
-        """
-        # Create datasets
-        train_dataset = FinancialDataset(train_texts, train_labels, self.tokenizer)
-        val_dataset = FinancialDataset(val_texts, val_labels, self.tokenizer)
-        
-        # Create dataloaders
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size)
-        
-        # Set up optimizer
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=2e-5)
-        
-        # Training loop
-        for epoch in range(epochs):
-            self.model.train()
-            total_loss = 0
-            
-            for batch in train_loader:
-                batch = {k: v.to(self.device) for k, v in batch.items()}
-                outputs = self.model(**batch)
-                loss = outputs.loss
-                
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                
-                total_loss += loss.item()
-            
-            # Validation
-            self.model.eval()
-            val_loss = 0
-            
-            with torch.no_grad():
-                for batch in val_loader:
-                    batch = {k: v.to(self.device) for k, v in batch.items()}
-                    outputs = self.model(**batch)
-                    val_loss += outputs.loss.item()
-            
-            logger.info(f"Epoch {epoch+1}/{epochs}")
-            logger.info(f"Training Loss: {total_loss/len(train_loader):.4f}")
-            logger.info(f"Validation Loss: {val_loss/len(val_loader):.4f}")
+            return "Neutral"
 
 # Example usage
 if __name__ == "__main__":
-    # Initialize sentiment analyzer
+    # Initialize analyzer
     analyzer = SentimentAnalyzer()
     
-    # Example text
-    text = "Apple Inc. reported strong quarterly earnings, exceeding market expectations."
+    # Example texts
+    texts = [
+        "The company reported strong earnings growth and positive outlook",
+        "The stock market showed mixed results today",
+        "The company faced significant losses and declining revenue"
+    ]
     
-    # Analyze sentiment
-    sentiment_scores = analyzer.analyze_sentiment(text)
-    print(f"Sentiment Scores: {sentiment_scores}")
+    # Example labels (1: positive, 0: neutral, -1: negative)
+    labels = [1, 0, -1]
     
-    # Generate trading signal
-    signal = analyzer.generate_signal(sentiment_scores)
-    print(f"Trading Signal: {signal}") 
+    # Train the analyzer
+    analyzer.train(texts, labels)
+    
+    # Analyze some new texts
+    test_texts = [
+        "The company's new product launch was successful",
+        "The market remained unchanged",
+        "The company's stock price dropped significantly"
+    ]
+    
+    for text in test_texts:
+        result = analyzer.analyze_sentiment(text)
+        print(f"\nText: {text}")
+        print(f"Sentiment: {analyzer.get_sentiment_label(result['sentiment'])}")
+        print(f"Scores: {result}") 

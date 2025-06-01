@@ -40,9 +40,18 @@ class DataCollector:
             raise Exception(f"Unexpected API response: {data}")
         df = pd.DataFrame.from_dict(data[time_series_key], orient="index")
         df.index = pd.to_datetime(df.index)
+        df = df.sort_index()  # Ensure the index is sorted
         df.columns = [col.split(".")[1] for col in df.columns]
         df = df.astype(float)
-        df = df.loc[start_time:end_time]
+        # Only slice if the requested dates are within the available index
+        available_start = df.index.min()
+        available_end = df.index.max()
+        req_start = pd.to_datetime(start_time)
+        req_end = pd.to_datetime(end_time)
+        # Adjust requested range to available range
+        slice_start = max(available_start, req_start)
+        slice_end = min(available_end, req_end)
+        df = df.loc[slice_start:slice_end]
         return df
 
     def collect_order_book_data(self, symbol: str) -> Dict:
@@ -87,6 +96,35 @@ class DataCollector:
         df.columns = [col.split(".")[1] for col in df.columns]
         df = df.astype(float)
         df = df.loc[start_time:end_time]
+        return df
+
+    def collect_crypto_ohlcv_data(self, coin_id: str, days: int = 60) -> pd.DataFrame:
+        """Collect daily OHLCV data from CoinGecko API for a cryptocurrency."""
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+        params = {
+            "vs_currency": "usd",
+            "days": days,
+            "interval": "daily"
+        }
+        response = requests.get(url, params=params)
+        if response.status_code != 200:
+            raise Exception(f"Error fetching data: {response.text}")
+        data = response.json()
+        if "prices" not in data or "total_volumes" not in data:
+            raise Exception(f"Unexpected API response: {data}")
+        # Extract prices and volumes
+        prices = pd.DataFrame(data["prices"], columns=["timestamp", "close"])
+        volumes = pd.DataFrame(data["total_volumes"], columns=["timestamp", "volume"])
+        # Merge prices and volumes
+        df = pd.merge(prices, volumes, on="timestamp")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df.set_index("timestamp", inplace=True)
+        df = df.sort_index()
+        # Compute OHLC from close prices (CoinGecko only provides close prices)
+        df["open"] = df["close"].shift(1)
+        df["high"] = df[["open", "close"]].max(axis=1)
+        df["low"] = df[["open", "close"]].min(axis=1)
+        df = df.dropna()
         return df
 
 def validate_data(df: pd.DataFrame) -> bool:
