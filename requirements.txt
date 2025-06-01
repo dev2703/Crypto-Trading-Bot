@@ -1,0 +1,38 @@
+# Core Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.2.0
+
+# Machine Learning
+torch>=2.0.0
+stable-baselines3>=2.0.0
+xgboost>=1.7.0
+transformers>=4.30.0
+
+# Data Collection
+python-binance>=1.0.17
+tweepy>=4.14.0
+praw>=7.7.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# Database
+psycopg2-binary>=2.9.6
+redis>=4.5.0
+sqlalchemy>=2.0.0
+timescaledb>=0.1.0
+
+# API & Web
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Development
+black>=23.7.0
+isort>=5.12.0
+flake8>=6.1.0 
