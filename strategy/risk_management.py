@@ -1,317 +1,224 @@
 """
-Risk Management Module for Crypto Trading
-- Position sizing based on feature importance
-- Dynamic risk checks
-- Portfolio management
-- Drawdown monitoring
-- Correlation analysis
+Risk Management Module
+- Tracks key performance indicators (KPIs)
+- Implements risk management rules
+- Calculates portfolio metrics
+- Monitors trading metrics
 """
-import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
+import numpy as np
+from typing import Dict, List, Tuple
 import logging
-from sklearn.ensemble import RandomForestClassifier
+from scipy import stats
+from datetime import datetime, timedelta
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class RiskManager:
-    def __init__(self, 
-                 max_position_size: float = 0.1,
-                 max_volatility: float = 0.5,
-                 max_drawdown: float = 0.2,
-                 max_correlation: float = 0.7,
-                 min_confidence: float = 0.7,
-                 feature_importance_threshold: float = 0.01):
-        """
-        Initialize risk management parameters.
-        
-        Args:
-            max_position_size: Maximum position size as fraction of portfolio
-            max_volatility: Maximum allowed volatility
-            max_drawdown: Maximum allowed drawdown
-            max_correlation: Maximum allowed correlation with market
-            min_confidence: Minimum confidence threshold for signals
-            feature_importance_threshold: Minimum importance for features to be considered
-        """
-        self.max_position_size = max_position_size
-        self.max_volatility = max_volatility
-        self.max_drawdown = max_drawdown
-        self.max_correlation = max_correlation
-        self.min_confidence = min_confidence
-        self.feature_importance_threshold = feature_importance_threshold
+    """Risk management for trading strategies."""
+    
+    def __init__(self, initial_capital: float = 1000000.0):
+        """Initialize risk manager."""
+        self.initial_capital = initial_capital
+        self.current_capital = initial_capital
         self.positions = {}
-        self.portfolio_value = 0.0
-        self.peak_value = 0.0
-        self.feature_importance = None
-        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
-
-    def update_feature_importance(self, feature_importance: Dict[str, float]):
-        """Update feature importance scores."""
-        self.feature_importance = feature_importance
-        logger.info("Updated feature importance scores")
-
-    def calculate_feature_based_position_size(self, 
-                                           signal: Dict,
-                                           available_capital: float) -> Tuple[float, Dict]:
-        """
-        Calculate position size based on feature importance and signal strength.
+        self.trades = []
+        self.daily_returns = pd.Series()
+        self.risk_metrics = {}
         
-        Args:
-            signal: Dictionary containing signal information
-            available_capital: Available capital for the position
+    def calculate_performance_metrics(self, returns: pd.Series) -> Dict[str, float]:
+        """Calculate performance metrics."""
+        metrics = {}
+        
+        # Basic returns
+        metrics['total_return'] = (1 + returns).prod() - 1
+        metrics['annualized_return'] = (1 + metrics['total_return']) ** (252/len(returns)) - 1
+        
+        # Risk-adjusted returns
+        metrics['sharpe_ratio'] = np.sqrt(252) * returns.mean() / returns.std()
+        metrics['sortino_ratio'] = np.sqrt(252) * returns.mean() / returns[returns < 0].std()
+        
+        # Drawdown metrics
+        cum_returns = (1 + returns).cumprod()
+        rolling_max = cum_returns.expanding().max()
+        drawdowns = cum_returns / rolling_max - 1
+        metrics['max_drawdown'] = drawdowns.min()
+        metrics['avg_drawdown'] = drawdowns[drawdowns < 0].mean()
+        
+        # Win rate and profit factor
+        winning_trades = returns[returns > 0]
+        losing_trades = returns[returns < 0]
+        metrics['win_rate'] = len(winning_trades) / len(returns)
+        metrics['profit_factor'] = abs(winning_trades.sum() / losing_trades.sum())
+        
+        return metrics
+        
+    def calculate_risk_metrics(self, returns: pd.Series, benchmark_returns: pd.Series = None) -> Dict[str, float]:
+        """Calculate risk metrics."""
+        metrics = {}
+        
+        # Value at Risk
+        metrics['var_95'] = np.percentile(returns, 5)
+        metrics['expected_shortfall'] = returns[returns <= metrics['var_95']].mean()
+        
+        # Volatility
+        metrics['annualized_volatility'] = returns.std() * np.sqrt(252)
+        metrics['downside_volatility'] = returns[returns < 0].std() * np.sqrt(252)
+        
+        # Beta and Alpha (if benchmark provided)
+        if benchmark_returns is not None:
+            beta = np.cov(returns, benchmark_returns)[0,1] / np.var(benchmark_returns)
+            alpha = returns.mean() - beta * benchmark_returns.mean()
+            metrics['beta'] = beta
+            metrics['alpha'] = alpha * 252  # Annualized
+            metrics['information_ratio'] = alpha / (returns - benchmark_returns).std() * np.sqrt(252)
             
-        Returns:
-            Tuple of (position_size, position_metrics)
-        """
-        if not self.feature_importance:
-            logger.warning("No feature importance scores available")
-            return 0.0, {}
-
-        # Calculate weighted signal strength based on feature importance
-        weighted_strength = 0.0
-        total_importance = 0.0
-        feature_contributions = {}
-
-        for feature, importance in self.feature_importance.items():
-            if importance >= self.feature_importance_threshold:
-                if feature in signal['feature_values']:
-                    contribution = importance * signal['feature_values'][feature]
-                    weighted_strength += contribution
-                    total_importance += importance
-                    feature_contributions[feature] = contribution
-
-        if total_importance > 0:
-            weighted_strength /= total_importance
-
-        # Calculate base position size
-        base_size = abs(weighted_strength) * self.max_position_size
-
-        # Adjust for volatility
-        vol_adjustment = 1 / (1 + signal['risk_metrics']['volatility'])
-        position_size = base_size * vol_adjustment
-
-        # Calculate position metrics
-        position_metrics = {
-            'weighted_strength': weighted_strength,
-            'feature_contributions': feature_contributions,
-            'volatility_adjustment': vol_adjustment,
-            'base_size': base_size,
-            'final_size': position_size
-        }
-
-        logger.info(f"Position size calculation: base={base_size:.2f}, "
-                   f"vol_adjustment={vol_adjustment:.2f}, final={position_size:.2f}")
-
-        return position_size, position_metrics
-
-    def calculate_dynamic_risk_limits(self, market_conditions: Dict) -> Dict:
-        """
-        Calculate dynamic risk limits based on market conditions.
+        return metrics
         
-        Args:
-            market_conditions: Dictionary containing market condition metrics
+    def calculate_trading_metrics(self, trades: List[Dict]) -> Dict[str, float]:
+        """Calculate trading metrics."""
+        if not trades:
+            return {}
             
-        Returns:
-            Dictionary of adjusted risk limits
-        """
-        # Adjust position size based on market volatility
-        vol_factor = 1 / (1 + market_conditions.get('market_volatility', 0))
-        adjusted_position_size = self.max_position_size * vol_factor
-
-        # Adjust drawdown limit based on market trend
-        trend_factor = 1 + market_conditions.get('market_trend', 0)
-        adjusted_drawdown = self.max_drawdown * trend_factor
-
-        # Adjust correlation limit based on market regime
-        regime_factor = 1 - market_conditions.get('regime_volatility', 0)
-        adjusted_correlation = self.max_correlation * regime_factor
-
-        return {
-            'position_size': adjusted_position_size,
-            'drawdown': adjusted_drawdown,
-            'correlation': adjusted_correlation,
-            'volatility': self.max_volatility * vol_factor
-        }
-
-    def risk_check(self, signal: Dict, market_conditions: Dict) -> Tuple[bool, Dict]:
-        """
-        Perform enhanced risk checks before executing a trade.
+        metrics = {}
+        trade_df = pd.DataFrame(trades)
         
-        Args:
-            signal: Dictionary containing signal information
-            market_conditions: Dictionary containing market condition metrics
-            
-        Returns:
-            Tuple of (passes_checks, risk_metrics)
-        """
-        # Get dynamic risk limits
-        risk_limits = self.calculate_dynamic_risk_limits(market_conditions)
+        # Turnover
+        total_volume = trade_df['volume'].sum()
+        metrics['turnover'] = total_volume / self.initial_capital
         
-        # Initialize risk metrics
-        risk_metrics = {
-            'checks_passed': 0,
-            'total_checks': 5,
-            'failed_checks': []
-        }
-
-        # Volatility check
-        if signal['risk_metrics']['volatility'] > risk_limits['volatility']:
-            risk_metrics['failed_checks'].append('volatility')
-            logger.warning(f"Trade rejected: Volatility {signal['risk_metrics']['volatility']:.2f} "
-                         f"exceeds maximum {risk_limits['volatility']:.2f}")
-        else:
-            risk_metrics['checks_passed'] += 1
-
-        # Drawdown check
-        if signal['risk_metrics']['drawdown'] > risk_limits['drawdown']:
-            risk_metrics['failed_checks'].append('drawdown')
-            logger.warning(f"Trade rejected: Drawdown {signal['risk_metrics']['drawdown']:.2f} "
-                         f"exceeds maximum {risk_limits['drawdown']:.2f}")
-        else:
-            risk_metrics['checks_passed'] += 1
-
-        # Correlation check
-        if signal['risk_metrics']['correlation'] > risk_limits['correlation']:
-            risk_metrics['failed_checks'].append('correlation')
-            logger.warning(f"Trade rejected: Correlation {signal['risk_metrics']['correlation']:.2f} "
-                         f"exceeds maximum {risk_limits['correlation']:.2f}")
-        else:
-            risk_metrics['checks_passed'] += 1
-
-        # Position size check
-        if signal['position_size'] > risk_limits['position_size']:
-            risk_metrics['failed_checks'].append('position_size')
-            logger.warning(f"Trade rejected: Position size {signal['position_size']:.2f} "
-                         f"exceeds maximum {risk_limits['position_size']:.2f}")
-        else:
-            risk_metrics['checks_passed'] += 1
-
-        # Confidence check
-        if signal['confidence'] < self.min_confidence:
-            risk_metrics['failed_checks'].append('confidence')
-            logger.warning(f"Trade rejected: Confidence {signal['confidence']:.2f} "
-                         f"below minimum {self.min_confidence:.2f}")
-        else:
-            risk_metrics['checks_passed'] += 1
-
-        # Calculate risk score
-        risk_metrics['risk_score'] = risk_metrics['checks_passed'] / risk_metrics['total_checks']
+        # Slippage and market impact
+        metrics['avg_slippage'] = (trade_df['execution_price'] - trade_df['intended_price']).mean()
+        metrics['market_impact'] = (trade_df['execution_price'] - trade_df['prev_close']).mean()
         
-        # Trade passes if all checks pass
-        passes_checks = risk_metrics['checks_passed'] == risk_metrics['total_checks']
+        # Fill rate
+        metrics['fill_rate'] = len(trade_df[trade_df['status'] == 'filled']) / len(trade_df)
         
-        return passes_checks, risk_metrics
-
-    def update_portfolio(self, 
-                        position_id: str, 
-                        size: float, 
-                        price: float, 
-                        timestamp: pd.Timestamp,
-                        risk_metrics: Dict):
-        """
-        Update portfolio with new position and risk metrics.
+        # Holding period
+        trade_df['holding_period'] = (trade_df['exit_time'] - trade_df['entry_time']).dt.total_seconds() / 3600
+        metrics['avg_holding_period'] = trade_df['holding_period'].mean()
         
-        Args:
-            position_id: Unique identifier for the position
-            size: Position size in base currency
-            price: Current price
-            timestamp: Timestamp of the update
-            risk_metrics: Dictionary containing risk metrics
-        """
-        self.positions[position_id] = {
-            'size': size,
-            'entry_price': price,
-            'current_price': price,
-            'timestamp': timestamp,
-            'pnl': 0.0,
-            'risk_metrics': risk_metrics
-        }
+        return metrics
         
-        self.portfolio_value = sum(pos['size'] * pos['current_price'] 
-                                 for pos in self.positions.values())
-        self.peak_value = max(self.peak_value, self.portfolio_value)
-
-    def calculate_portfolio_metrics(self) -> Dict:
-        """
-        Calculate enhanced portfolio performance metrics.
+    def calculate_portfolio_metrics(self, positions: Dict[str, float], prices: Dict[str, pd.Series]) -> Dict[str, float]:
+        """Calculate portfolio metrics."""
+        metrics = {}
         
-        Returns:
-            Dictionary containing portfolio metrics
-        """
-        if not self.positions:
-            return {
-                'total_value': 0.0,
-                'drawdown': 0.0,
-                'sharpe_ratio': 0.0,
-                'sortino_ratio': 0.0,
-                'max_drawdown': 0.0,
-                'win_rate': 0.0,
-                'position_count': 0,
-                'avg_risk_score': 0.0
-            }
-            
-        # Calculate returns
-        returns = pd.Series([pos['pnl'] for pos in self.positions.values()])
+        # Position sizes
+        position_values = {coin: size * prices[coin].iloc[-1] for coin, size in positions.items()}
+        total_value = sum(position_values.values())
         
-        # Calculate metrics
-        metrics = {
-            'total_value': self.portfolio_value,
-            'drawdown': (self.peak_value - self.portfolio_value) / self.peak_value,
-            'sharpe_ratio': returns.mean() / returns.std() if len(returns) > 1 else 0.0,
-            'sortino_ratio': returns.mean() / returns[returns < 0].std() if len(returns[returns < 0]) > 0 else 0.0,
-            'max_drawdown': abs(returns.min()) if len(returns) > 0 else 0.0,
-            'win_rate': len(returns[returns > 0]) / len(returns) if len(returns) > 0 else 0.0,
-            'position_count': len(self.positions),
-            'avg_risk_score': np.mean([pos['risk_metrics'].get('risk_score', 0) for pos in self.positions.values()])
+        # Concentration
+        weights = {coin: value/total_value for coin, value in position_values.items()}
+        metrics['hhi'] = sum(w**2 for w in weights.values())  # Herfindahl-Hirschman Index
+        
+        # Correlation matrix
+        returns = pd.DataFrame({coin: prices[coin].pct_change() for coin in positions.keys()})
+        metrics['avg_correlation'] = returns.corr().mean().mean()
+        
+        # Liquidity risk
+        metrics['liquidity_risk'] = {
+            coin: positions[coin] / prices[coin].rolling(20).mean().iloc[-1]
+            for coin in positions.keys()
         }
         
         return metrics
-
+        
+    def update_risk_limits(self, metrics: Dict[str, float]) -> Dict[str, bool]:
+        """Update risk limits based on current metrics."""
+        limits = {
+            'max_position_size': 0.1,  # 10% of portfolio
+            'max_drawdown': 0.2,       # 20% maximum drawdown
+            'min_sharpe': 1.0,         # Minimum Sharpe ratio
+            'max_correlation': 0.7,    # Maximum correlation between assets
+            'max_leverage': 2.0,       # Maximum leverage
+            'min_liquidity': 0.01      # Minimum liquidity ratio
+        }
+        
+        violations = {}
+        for metric, value in metrics.items():
+            if metric in limits:
+                violations[metric] = value > limits[metric]
+                
+        return violations
+        
+    def calculate_position_size(self, 
+                              signal_strength: float,
+                              volatility: float,
+                              market_regime: str,
+                              portfolio_weight: float) -> float:
+        """Calculate position size based on risk parameters."""
+        # Base position size
+        base_size = self.current_capital * portfolio_weight
+        
+        # Adjust for signal strength
+        signal_factor = min(abs(signal_strength), 1.0)
+        
+        # Adjust for volatility
+        vol_factor = 1 / (1 + volatility)
+        
+        # Adjust for market regime
+        regime_factor = 1.2 if market_regime == 'trending' else 0.8
+        
+        # Calculate final position size
+        position_size = base_size * signal_factor * vol_factor * regime_factor
+        
+        # Apply risk limits
+        max_position = self.current_capital * 0.1  # 10% of portfolio
+        position_size = min(position_size, max_position)
+        
+        return position_size
+        
+    def update_metrics(self, 
+                      returns: pd.Series,
+                      trades: List[Dict],
+                      positions: Dict[str, float],
+                      prices: Dict[str, pd.Series],
+                      benchmark_returns: pd.Series = None) -> Dict[str, Dict[str, float]]:
+        """Update all risk metrics."""
+        self.risk_metrics = {
+            'performance': self.calculate_performance_metrics(returns),
+            'risk': self.calculate_risk_metrics(returns, benchmark_returns),
+            'trading': self.calculate_trading_metrics(trades),
+            'portfolio': self.calculate_portfolio_metrics(positions, prices)
+        }
+        
+        # Update risk limits
+        self.risk_metrics['violations'] = self.update_risk_limits(self.risk_metrics['performance'])
+        
+        return self.risk_metrics
+        
     def generate_risk_report(self) -> str:
-        """
-        Generate a detailed risk report.
-        
-        Returns:
-            Formatted risk report string
-        """
-        metrics = self.calculate_portfolio_metrics()
-        
-        report = f"""
-Risk Management Report
----------------------
-Portfolio Value: ${metrics['total_value']:,.2f}
-Current Drawdown: {metrics['drawdown']*100:.2f}%
-Maximum Drawdown: {metrics['max_drawdown']*100:.2f}%
-Sharpe Ratio: {metrics['sharpe_ratio']:.2f}
-Sortino Ratio: {metrics['sortino_ratio']:.2f}
-Win Rate: {metrics['win_rate']*100:.2f}%
-Active Positions: {metrics['position_count']}
-Average Risk Score: {metrics['avg_risk_score']:.2f}
-
-Risk Limits:
-- Max Position Size: {self.max_position_size*100:.1f}%
-- Max Volatility: {self.max_volatility*100:.1f}%
-- Max Drawdown: {self.max_drawdown*100:.1f}%
-- Max Correlation: {self.max_correlation*100:.1f}%
-- Min Confidence: {self.min_confidence*100:.1f}%
-- Feature Importance Threshold: {self.feature_importance_threshold:.3f}
-
-Top Feature Contributions:
-{self._format_feature_contributions()}
-"""
-        return report
-
-    def _format_feature_contributions(self) -> str:
-        """Format feature contributions for the risk report."""
-        if not self.feature_importance:
-            return "No feature importance data available"
+        """Generate a comprehensive risk report."""
+        if not self.risk_metrics:
+            return "No risk metrics available."
             
-        top_features = sorted(
-            self.feature_importance.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:5]
+        report = "Risk Management Report\n"
+        report += "=====================\n\n"
         
-        return "\n".join([f"- {feature}: {importance:.3f}" 
-                         for feature, importance in top_features]) 
+        # Performance metrics
+        report += "Performance Metrics:\n"
+        for metric, value in self.risk_metrics['performance'].items():
+            report += f"{metric}: {value:.4f}\n"
+            
+        # Risk metrics
+        report += "\nRisk Metrics:\n"
+        for metric, value in self.risk_metrics['risk'].items():
+            report += f"{metric}: {value:.4f}\n"
+            
+        # Trading metrics
+        report += "\nTrading Metrics:\n"
+        for metric, value in self.risk_metrics['trading'].items():
+            report += f"{metric}: {value:.4f}\n"
+            
+        # Portfolio metrics
+        report += "\nPortfolio Metrics:\n"
+        for metric, value in self.risk_metrics['portfolio'].items():
+            report += f"{metric}: {value:.4f}\n"
+            
+        # Risk limit violations
+        report += "\nRisk Limit Violations:\n"
+        for metric, violated in self.risk_metrics['violations'].items():
+            report += f"{metric}: {'VIOLATED' if violated else 'OK'}\n"
+            
+        return report 

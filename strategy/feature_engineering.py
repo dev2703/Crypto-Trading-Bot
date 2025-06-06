@@ -5,17 +5,24 @@ Feature Engineering Module for Crypto Trading
 - Volatility features
 - Market structure features
 - Temporal features
-- No imputation to maintain data integrity
+- Conservative NaN handling with data quality checks
 """
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import talib
 import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
+import ta
+from ta.trend import SMAIndicator, EMAIndicator, MACD
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.volatility import BollingerBands
+from ta.volume import VolumeWeightedAveragePrice
+from scipy import stats
+from .advanced_indicators import AdvancedIndicators
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,6 +40,109 @@ class FeatureEngineer:
         self.scaler = StandardScaler()
         self.pca = PCA(n_components=0.95)  # Keep 95% variance
         self.fitted = False
+        self.feature_importance = {}
+        self.min_periods = 5  # Minimum periods for rolling calculations
+        self.max_nan_ratio = 0.1  # Maximum allowed ratio of NaN values
+        self.data_quality_threshold = 0.95  # Minimum required data quality score
+        self.advanced_indicators = AdvancedIndicators()
+
+    def _check_data_quality(self, df: pd.DataFrame) -> Tuple[bool, float, Dict[str, float]]:
+        """
+        Check data quality and return quality metrics.
+        
+        Args:
+            df: Input DataFrame
+            
+        Returns:
+            Tuple of (is_acceptable, quality_score, column_quality)
+        """
+        total_rows = len(df)
+        column_quality = {}
+        for col in df.columns:
+            try:
+                nan_ratio = df[col].isna().sum() / total_rows
+                if not isinstance(nan_ratio, float) and hasattr(nan_ratio, '__len__'):
+                    logger.warning(f"Skipping column {col} in data quality check due to non-scalar nan_ratio.")
+                    continue
+                column_quality[col] = float(1 - nan_ratio)
+                # Check for suspicious patterns
+                if col in ['open', 'high', 'low', 'close']:
+                    price_std = df[col].std()
+                    price_mean = df[col].mean()
+                    z_scores = np.abs((df[col] - price_mean) / price_std)
+                    anomaly_ratio = (z_scores > 3).mean()
+                    column_quality[col] *= (1 - anomaly_ratio)
+                elif col == 'volume':
+                    volume_std = df[col].std()
+                    volume_mean = df[col].mean()
+                    z_scores = np.abs((df[col] - volume_mean) / volume_std)
+                    anomaly_ratio = (z_scores > 3).mean()
+                    column_quality[col] *= (1 - anomaly_ratio)
+            except Exception as e:
+                logger.warning(f"Skipping column {col} in data quality check due to error: {e}")
+                continue
+        # Only use float values for quality_score
+        float_qualities = [v for v in column_quality.values() if isinstance(v, float)]
+        quality_score = np.mean(float_qualities) if float_qualities else 0.0
+        is_acceptable = quality_score >= self.data_quality_threshold
+        return is_acceptable, quality_score, column_quality
+
+    def _handle_nan_values(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Handle NaN values conservatively with data quality checks.
+        
+        Args:
+            df: Input DataFrame
+            
+        Returns:
+            DataFrame with NaN values handled appropriately
+        """
+        logger.info("Checking data quality...")
+        is_acceptable, quality_score, column_quality = self._check_data_quality(df)
+        
+        if not is_acceptable:
+            logger.warning(f"Data quality score {quality_score:.2f} below threshold {self.data_quality_threshold}")
+            logger.warning("Column quality scores:")
+            for col, score in column_quality.items():
+                logger.warning(f"{col}: {score:.2f}")
+        
+        df_clean = df.copy()
+        
+        # 1. Handle price data
+        price_cols = ['open', 'high', 'low', 'close']
+        for col in price_cols:
+            if col in df_clean.columns:
+                nan_ratio = df_clean[col].isna().sum() / len(df_clean)
+                if nan_ratio > self.max_nan_ratio:
+                    logger.warning(f"High NaN ratio ({nan_ratio:.2f}) in {col}, marking as invalid")
+                    df_clean[col] = np.nan
+                else:
+                    # Only fill small gaps (up to 3 periods)
+                    df_clean[col] = df_clean[col].fillna(method='ffill', limit=3)
+        
+        # 2. Handle volume data
+        if 'volume' in df_clean.columns:
+            nan_ratio = df_clean['volume'].isna().sum() / len(df_clean)
+            if nan_ratio > self.max_nan_ratio:
+                logger.warning(f"High NaN ratio ({nan_ratio:.2f}) in volume, marking as invalid")
+                df_clean['volume'] = np.nan
+            else:
+                # Use 0 for missing volume (more conservative than median)
+                df_clean['volume'] = df_clean['volume'].fillna(0)
+        
+        # 3. Handle technical indicators
+        for col in df_clean.columns:
+            if col not in price_cols and col != 'volume':
+                nan_ratio = df_clean[col].isna().sum() / len(df_clean)
+                if nan_ratio > self.max_nan_ratio:
+                    logger.warning(f"High NaN ratio ({nan_ratio:.2f}) in {col}, marking as invalid")
+                    df_clean[col] = np.nan
+                else:
+                    # Don't fill NaN values for indicators
+                    # Instead, mark them as invalid for signal generation
+                    pass
+        
+        return df_clean
 
     def _safe_division(self, a: pd.Series, b: pd.Series) -> pd.Series:
         """Safely divide two series, handling division by zero."""
@@ -72,6 +182,47 @@ class FeatureEngineer:
         features['engulfing'] = talib.CDLENGULFING(df['open'], df['high'], df['low'], df['close'])
         features['doji'] = talib.CDLDOJI(df['open'], df['high'], df['low'], df['close'])
         
+        # Trend features - Using pandas rolling mean for reliability
+        for window in self.window_sizes:
+            features[f'sma_{window}'] = df['close'].rolling(window=window, min_periods=1).mean()
+            features[f'ema_{window}'] = df['close'].ewm(span=window, min_periods=1).mean()
+        
+        # MACD
+        try:
+            macd = MACD(close=df['close'])
+            features['macd'] = macd.macd()
+            features['macd_signal'] = macd.macd_signal()
+            features['macd_diff'] = macd.macd_diff()
+        except Exception as e:
+            logger.warning(f"Error calculating MACD: {str(e)}")
+            # Fallback to manual calculation
+            exp1 = df['close'].ewm(span=12, adjust=False).mean()
+            exp2 = df['close'].ewm(span=26, adjust=False).mean()
+            features['macd'] = exp1 - exp2
+            features['macd_signal'] = features['macd'].ewm(span=9, adjust=False).mean()
+            features['macd_diff'] = features['macd'] - features['macd_signal']
+        
+        # Bollinger Bands
+        try:
+            bb = BollingerBands(close=df['close'])
+            features['bb_high'] = bb.bollinger_hband()
+            features['bb_low'] = bb.bollinger_lband()
+            features['bb_mid'] = bb.bollinger_mavg()
+            features['bb_width'] = (features['bb_high'] - features['bb_low']) / features['bb_mid']
+        except Exception as e:
+            logger.warning(f"Error calculating Bollinger Bands: {str(e)}")
+            # Fallback to manual calculation
+            features['bb_mid'] = df['close'].rolling(window=20).mean()
+            std = df['close'].rolling(window=20).std()
+            features['bb_high'] = features['bb_mid'] + (std * 2)
+            features['bb_low'] = features['bb_mid'] - (std * 2)
+            features['bb_width'] = (features['bb_high'] - features['bb_low']) / features['bb_mid']
+        
+        # Ensure all features are properly filled
+        for key in features:
+            if isinstance(features[key], pd.Series):
+                features[key] = features[key].fillna(method='ffill').fillna(method='bfill').fillna(0)
+        
         return pd.concat([df, pd.DataFrame(features, index=df.index)], axis=1)
 
     def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -94,6 +245,24 @@ class FeatureEngineer:
                 lambda x: np.sum(x * (x > x.mean())) / np.sum(x) if np.sum(x) != 0 else 0
             )
         
+        # Volume indicators
+        features['volume_ma'] = df['volume'].rolling(window=20).mean()
+        features['volume_std'] = df['volume'].rolling(window=20).std()
+        features['volume_ratio'] = df['volume'] / features['volume_ma']
+        
+        # VWAP
+        vwap = VolumeWeightedAveragePrice(
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            volume=df['volume']
+        )
+        features['vwap'] = vwap.volume_weighted_average_price()
+        
+        # Volume profile
+        features['volume_price_ma'] = df['volume'] * df['close']
+        features['volume_price_ratio'] = features['volume_price_ma'] / features['volume_ma']
+        
         return pd.concat([df, pd.DataFrame(features, index=df.index)], axis=1)
 
     def _add_volatility_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -108,6 +277,14 @@ class FeatureEngineer:
             ).rolling(window, min_periods=1).mean() * np.sqrt(252)
             vol_mean = features[f'hist_vol_{window}'].rolling(window, min_periods=1).mean()
             features[f'vol_ratio_{window}'] = self._safe_division(features[f'hist_vol_{window}'], vol_mean)
+        
+        # Historical volatility
+        for window in [5, 10, 20, 50]:
+            features[f'volatility_{window}'] = df['returns'].rolling(window=window).std()
+        
+        # Volatility ratios
+        features['volatility_ratio'] = features['volatility_20'] / features['volatility_50']
+        features['atr_ratio'] = features['atr_20'] / df['close']
         
         return pd.concat([df, pd.DataFrame(features, index=df.index)], axis=1)
 
@@ -136,6 +313,16 @@ class FeatureEngineer:
                 df['close'].rolling(window, min_periods=1).mean()
             )
         
+        # Ensure sma_20 and sma_50 are present
+        if 'sma_20' not in features:
+            features['sma_20'] = df['close'].rolling(window=20, min_periods=1).mean()
+        if 'sma_50' not in features:
+            features['sma_50'] = df['close'].rolling(window=50, min_periods=1).mean()
+        # Market regime (vectorized, no ambiguous boolean)
+        features['trend_strength'] = abs(features['sma_20'] - features['sma_50']) / features['sma_50']
+        # Use np.where for vectorized assignment
+        features['market_regime'] = np.where(features['trend_strength'].values > 0.02, 'trending', 'ranging')
+        
         return pd.concat([df, pd.DataFrame(features, index=df.index)], axis=1)
 
     def _add_temporal_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -151,6 +338,7 @@ class FeatureEngineer:
         features['hour_cos'] = np.cos(2 * np.pi * features['hour'] / 24) if 'hour' in features else 0
         features['day_sin'] = np.sin(2 * np.pi * features['day_of_week'] / 7) if 'day_of_week' in features else 0
         features['day_cos'] = np.cos(2 * np.pi * features['day_of_week'] / 7) if 'day_of_week' in features else 0
+        features['month'] = df.index.month if hasattr(df.index, 'month') else 0
         return pd.concat([df, pd.DataFrame(features, index=df.index)], axis=1)
 
     def _preprocess_for_pca(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -182,47 +370,201 @@ class FeatureEngineer:
         
         return df
 
+    def _validate_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add validation flags for each feature (True if not NaN, False if NaN).
+        Only assign Series to each *_valid column, and skip columns that are not present or are not Series.
+        """
+        df_valid = df.copy()
+        for col in df.columns:
+            # Only validate if col is a Series (not a DataFrame) and not a multi-index
+            if col in df and isinstance(df[col], pd.Series) and df[col].ndim == 1:
+                df_valid[f'{col}_valid'] = ~df[col].isna()
+        return df_valid
+
     def generate_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Generate all features without imputation."""
-        logger.info("Starting feature generation...")
-        
-        # Add features
-        df = self._add_price_features(df)
-        logger.info("Added price features")
-        
-        df = self._add_volume_features(df)
-        logger.info("Added volume features")
-        
-        df = self._add_volatility_features(df)
-        logger.info("Added volatility features")
-        
-        df = self._add_market_structure_features(df)
-        logger.info("Added market structure features")
-        
-        df = self._add_temporal_features(df)
-        logger.info("Added temporal features")
-        
-        # Preprocess for PCA
-        df = self._preprocess_for_pca(df)
-        logger.info("Preprocessed data for PCA")
-        
-        # Apply PCA for feature reduction
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        if len(numeric_cols) > 0:
-            try:
-                pca_features = self.pca.fit_transform(df[numeric_cols])
-                pca_cols = [f'pca_{i+1}' for i in range(pca_features.shape[1])]
-                df_pca = pd.DataFrame(pca_features, index=df.index, columns=pca_cols)
-                df = pd.concat([df, df_pca], axis=1)
-                logger.info(f"Applied PCA, reduced to {len(pca_cols)} components")
-            except Exception as e:
-                logger.error(f"Error in PCA: {str(e)}")
-                logger.info("Skipping PCA due to error")
-        else:
-            logger.warning("No numeric columns available for PCA")
-        
-        self.fitted = True
-        return df
+        """Generate all features with data quality checks."""
+        try:
+            # Create a copy to avoid modifying the original
+            df = df.copy()
+            
+            # Add basic price features
+            df = self._add_price_features(df)
+            
+            # Add volume features
+            df = self._add_volume_features(df)
+            
+            # Add volatility features
+            df = self._add_volatility_features(df)
+            
+            # Add market structure features
+            df = self._add_market_structure_features(df)
+            
+            # Add temporal features
+            df = self._add_temporal_features(df)
+            
+            # Add advanced indicators
+            df = self._add_advanced_indicators(df)
+            
+            # Add data quality flags
+            df = self._add_data_quality_flags(df)
+            
+            # Fill NaN values with appropriate methods
+            df = self._fill_missing_values(df)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error generating features: {str(e)}")
+            raise
+
+    def _add_advanced_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add advanced technical indicators."""
+        try:
+            # Calculate KAMA
+            df['kama_20'] = self.advanced_indicators.calculate_kama(df['close'], period=20)
+            df['kama_50'] = self.advanced_indicators.calculate_kama(df['close'], period=50)
+            
+            # Calculate log returns
+            df['log_returns'] = self.advanced_indicators.calculate_log_returns(df['close'])
+            
+            # Calculate derivatives
+            first_der, second_der = self.advanced_indicators.calculate_derivatives(df['close'])
+            df['price_first_derivative'] = first_der
+            df['price_second_derivative'] = second_der
+            
+            # Calculate spread
+            df['price_spread'] = self.advanced_indicators.calculate_spread(df['high'], df['low'])
+            
+            # Calculate volatility estimators
+            df['parkinson_vol'] = self.advanced_indicators.calculate_parkinson_volatility(df['high'], df['low'])
+            df['yang_zhang_vol'] = self.advanced_indicators.calculate_yang_zhang_volatility(
+                df['open'], df['high'], df['low'], df['close']
+            )
+            
+            # Detect displacement and gaps
+            df['displacement'] = self.advanced_indicators.detect_displacement(df['high'], df['low'], df['close'])
+            df['gaps'] = self.advanced_indicators.detect_gaps(df['open'], df['close'])
+            
+            # Calculate market regime using KAMA
+            df['market_regime'] = self.advanced_indicators.calculate_market_regime(df['close'])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding advanced indicators: {str(e)}")
+            return df
+
+    def _add_data_quality_flags(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add data quality flags for all features."""
+        try:
+            # Create a copy to avoid fragmentation
+            df = df.copy()
+            
+            # Ensure index is unique
+            if not df.index.is_unique:
+                logger.warning("Duplicate index values found. Resetting index to ensure uniqueness.")
+                df = df.reset_index().drop_duplicates(subset='index').set_index('index')
+            
+            # Get all feature columns (excluding price and volume data)
+            feature_columns = [col for col in df.columns if col not in ['open', 'high', 'low', 'close', 'volume']]
+            
+            # Create quality flags dictionary
+            quality_flags = {}
+            for col in feature_columns:
+                if col not in df.columns:
+                    logger.warning(f"Feature column '{col}' not found in DataFrame. Skipping quality flag.")
+                    continue
+                    
+                col_data = df[col]
+                logger.debug(f"Processing feature column: {col}, type: {type(col_data)}, shape: {getattr(col_data, 'shape', None)}")
+                
+                # Skip if column is not a Series or has wrong dimensions
+                if not isinstance(col_data, pd.Series) or col_data.ndim != 1:
+                    logger.warning(f"Skipping quality flag for column '{col}' due to non-1D shape or type.")
+                    continue
+                
+                # Create quality flag name
+                flag_name = f'{col}_valid'
+                
+                # Drop existing flag if present
+                if flag_name in df.columns:
+                    logger.warning(f"Dropping existing column '{flag_name}' before adding new quality flag.")
+                    df = df.drop(columns=[flag_name])
+                
+                # Create quality flag based on data quality
+                quality_flags[flag_name] = (
+                    col_data.notna() & 
+                    (col_data != np.inf) & 
+                    (col_data != -np.inf) &
+                    (col_data != 0)  # Exclude zero values as they might indicate missing data
+                )
+                
+                # Log quality statistics
+                valid_count = quality_flags[flag_name].sum()
+                total_count = len(quality_flags[flag_name])
+                valid_percentage = (valid_count / total_count) * 100
+                logger.debug(f"Quality stats for {col}: {valid_count}/{total_count} valid ({valid_percentage:.1f}%)")
+            
+            # Add all quality flags at once using pd.concat
+            if quality_flags:
+                df = pd.concat([df, pd.DataFrame(quality_flags, index=df.index)], axis=1)
+                
+                # Check for duplicate columns
+                duplicates = df.columns[df.columns.duplicated()].unique()
+                if len(duplicates) > 0:
+                    logger.error(f"Duplicate columns found after adding quality flags: {duplicates}")
+                    # Keep only the first occurrence of each duplicate
+                    df = df.loc[:, ~df.columns.duplicated()]
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding data quality flags: {str(e)}")
+            raise
+
+    def _fill_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Fill missing values with appropriate methods."""
+        try:
+            # Forward fill for price and volume data
+            price_cols = ['open', 'high', 'low', 'close']
+            df[price_cols] = df[price_cols].fillna(method='ffill')
+            
+            # Fill volume with 0
+            df['volume'] = df['volume'].fillna(0)
+            
+            # Fill technical indicators with appropriate defaults
+            indicator_defaults = {
+                'rsi': 50,
+                'macd': 0,
+                'macd_signal': 0,
+                'stoch_k': 50,
+                'stoch_d': 50,
+                'adx': 25,
+                'plus_di14': 25,
+                'minus_di14': 25,
+                'dx': 25,
+                'kama_20': df['close'],
+                'kama_50': df['close'],
+                'log_returns': 0,
+                'price_first_derivative': 0,
+                'price_second_derivative': 0,
+                'parkinson_vol': df['close'].pct_change().rolling(20).std(),
+                'yang_zhang_vol': df['close'].pct_change().rolling(20).std(),
+                'displacement': 0,
+                'gaps': 0,
+                'market_regime': 0
+            }
+            
+            for col, default in indicator_defaults.items():
+                if col in df.columns:
+                    df[col] = df[col].fillna(default)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error filling missing values: {str(e)}")
+            return df
 
     def plot_correlation_heatmap(self, df: pd.DataFrame, save_path: str = 'correlation_heatmap.png'):
         """Plot correlation heatmap of features."""
@@ -253,6 +595,22 @@ class FeatureEngineer:
         plt.ylabel('Frequency')
         plt.savefig(save_path)
         plt.close()
+
+    def calculate_feature_importance(self, df: pd.DataFrame, target: str) -> Dict[str, float]:
+        """Calculate feature importance scores."""
+        # Calculate correlation with target
+        correlations = df.corr()[target].abs()
+        
+        # Calculate mutual information
+        from sklearn.feature_selection import mutual_info_regression
+        mi_scores = mutual_info_regression(df.drop(columns=[target]), df[target])
+        mi_scores = pd.Series(mi_scores, index=df.drop(columns=[target]).columns)
+        
+        # Combine scores
+        importance = (correlations + mi_scores) / 2
+        self.feature_importance = importance.to_dict()
+        
+        return self.feature_importance
 
 # Example usage
 if __name__ == "__main__":
